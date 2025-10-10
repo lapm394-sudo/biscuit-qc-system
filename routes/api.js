@@ -244,9 +244,16 @@ router.put('/products/:id', asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'Product not found' });
   }
   
-  // Return updated product with full configuration
-  const configResult = await db.query('SELECT get_product_configuration($1) as config', [id]);
-  res.json(configResult.rows[0].config);
+  // Return updated product with full configuration when available; otherwise return the updated row
+  try {
+    const configResult = await db.query('SELECT get_product_configuration($1) as config', [id]);
+    if (configResult?.rows?.[0]?.config) {
+      return res.json(configResult.rows[0].config);
+    }
+  } catch (e) {
+    // Function may not exist in some DB setups; fall back below
+  }
+  return res.json(updated);
 }));
 
 // DELETE /api/products/:id - Delete product
