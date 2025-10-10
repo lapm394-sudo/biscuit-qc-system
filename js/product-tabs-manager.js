@@ -886,9 +886,21 @@
             if (addSectionBtn && !addSectionBtn.hasAttribute('data-initialized')) {
                 addSectionBtn.setAttribute('data-initialized', 'true');
                 addSectionBtn.addEventListener('click', () => {
-                    if (typeof window.addFormSection === 'function') {
-                        window.addFormSection();
-                    }
+                    try {
+                        // Use legacy addSection in js/script.js if available (requires sectionsContainer)
+                        if (typeof window.addSection === 'function') {
+                            window.addSection();
+                            return;
+                        }
+                        // Fallback: create a minimal section panel inside child tabs
+                        const container = document.querySelector('.child-tabs-content');
+                        if (!container) return;
+                        const panel = document.createElement('div');
+                        panel.className = 'section-panel';
+                        panel.setAttribute('data-section-id', `section-${Date.now()}`);
+                        panel.innerHTML = `<div class="section-title font-semibold mb-2">New Section</div>`;
+                        container.appendChild(panel);
+                    } catch (e) { console.warn('Failed to add section:', e); }
                 });
             }
 

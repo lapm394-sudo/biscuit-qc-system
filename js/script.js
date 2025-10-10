@@ -1047,7 +1047,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Updated function to add a section as a child tab
-    function addSection(section = null) {
+    window.addSection = function(section = null) {
         const childTabsNav = document.querySelector('#product-modal .child-tabs-nav');
         const childTabsContent = document.querySelector('#product-modal .child-tabs-content');
 
@@ -6942,7 +6942,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Add section to product modal
-    function addSection(section = null) {
+    window.addSection = function(section = null) {
         const sectionContainer = document.createElement('div');
         sectionContainer.className = 'section-container';
 
