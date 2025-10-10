@@ -195,6 +195,35 @@ router.post('/products', asyncHandler(async (req, res) => {
   });
 }));
 
+// GET /api/products/:id - Get single product with full configuration
+router.get('/products/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  if (!validateUUID(id)) {
+    return res.status(400).json({ error: 'Invalid product ID format' });
+  }
+  
+  // Try to get full product configuration if database function exists
+  try {
+    const configResult = await db.query('SELECT get_product_configuration($1) as config', [id]);
+    const config = configResult?.rows?.[0]?.config;
+    
+    if (config) {
+      return res.json(config);
+    }
+  } catch (e) {
+    // If the function doesn't exist or fails, fall back to basic product fetch
+    // This ensures the endpoint still works in minimal DB setups
+  }
+  
+  const product = await db.findById('products', id);
+  if (!product) {
+    return res.status(404).json({ error: 'Product not found' });
+  }
+  
+  return res.json(product);
+}));
+
 // PUT /api/products/:id - Update product
 router.put('/products/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
