@@ -1,0 +1,30 @@
+
+> biscuit-qc-system@1.0.0 start
+> node server.js
+
+[36m[3:55:31 PM] INFO[0m Application starting {
+  service: 'biscuit-qc',
+  nodeVersion: 'v20.19.5',
+  platform: 'linux',
+  pid: 976,
+  environment: undefined,
+  config: { port: 3000, database: 'configured' }
+}
+[31m[3:55:32 PM] ERROR[0m Database connection failed {
+  service: 'biscuit-qc',
+  error: { name: 'AggregateError', message: '' },
+  stack: 'AggregateError [ECONNREFUSED]: \n' +
+    '    at /home/user/flutter_app/node_modules/pg-pool/index.js:45:11\n' +
+    '    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n' +
+    '    at async Database.initialize (/home/user/flutter_app/config/database.js:102:22)\n' +
+    '    at async startServer (/home/user/flutter_app/server.js:120:5)'
+}
+[31m[3:55:32 PM] ERROR[0m Failed to start server {
+  service: 'biscuit-qc',
+  error: { name: 'AggregateError', message: '' },
+  stack: 'AggregateError [ECONNREFUSED]: \n' +
+    '    at /home/user/flutter_app/node_modules/pg-pool/index.js:45:11\n' +
+    '    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n' +
+    '    at async Database.initialize (/home/user/flutter_app/config/database.js:102:22)\n' +
+    '    at async startServer (/home/user/flutter_app/server.js:120:5)'
+}

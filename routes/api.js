@@ -24,8 +24,24 @@ const validateUUID = (id) => {
 // PRODUCTS API ROUTES
 // ================================================================
 
-// GET /api/products - List all products
 // GET /api/products/:id - Get single product with full configuration
+router.get('/products/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  if (!validateUUID(id)) {
+    return res.status(400).json({ error: 'Invalid product ID format' });
+  }
+  
+  const configResult = await db.query('SELECT get_product_configuration($1) as config', [id]);
+  
+  if (!configResult.rows[0].config || !configResult.rows[0].config.product) {
+    return res.status(404).json({ error: 'Product not found' });
+  }
+  
+  res.json(configResult.rows[0].config);
+}));
+
+// GET /api/products - List all products
 router.get('/products', asyncHandler(async (req, res) => {
   const { search, active, limit = 100, offset = 0 } = req.query;
 
@@ -129,7 +145,7 @@ router.post('/products', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'product_id, name, and code are required' });
   }
   
-  const result = await db.transaction(async (client) => {
+  const productUuid = await db.transaction(async (client) => {
     // Insert product
     const productResult = await client.query(`
       INSERT INTO products (
@@ -157,8 +173,17 @@ router.post('/products', asyncHandler(async (req, res) => {
       `, [productUuid, variable.name, variable.value, variable.description]);
     }
     
-    // Insert sections and parameters
+    // Insert sections and parameters with UI metadata
     for (const section of sections) {
+      // Store UI metadata (tables, layout, etc.) in validation_rule
+      const sectionMetadata = {
+        icon: section.icon,
+        tables: section.tables,
+        layout: section.layout,
+        uiConfig: section.uiConfig,
+        metadata: section.metadata
+      };
+      
       const sectionResult = await client.query(`
         INSERT INTO product_sections (product_id, section_id, section_name, section_type, order_index)
         VALUES ($1, $2, $3, $4, $5) RETURNING id
@@ -166,7 +191,31 @@ router.post('/products', asyncHandler(async (req, res) => {
       
       const sectionUuid = sectionResult.rows[0].id;
       
-      for (const parameter of section.parameters || []) {
+      // If section has parameters, insert them
+      if (section.parameters && section.parameters.length > 0) {
+        for (const parameter of section.parameters) {
+          // Combine validation rules with UI metadata
+          const paramMetadata = {
+            ...parameter.validation_rule,
+            uiMetadata: sectionMetadata
+          };
+          
+          await client.query(`
+            INSERT INTO product_parameters (
+              section_id, parameter_id, parameter_name, parameter_type,
+              default_value, validation_rule, calculation_formula, order_index,
+              is_required
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `, [
+            sectionUuid, parameter.parameter_id, parameter.parameter_name,
+            parameter.parameter_type, parameter.default_value,
+            JSON.stringify(paramMetadata),
+            JSON.stringify(parameter.calculation_formula),
+            parameter.order_index, parameter.is_required
+          ]);
+        }
+      } else if (section.metadata || section.tables) {
+        // If section has no parameters but has metadata/tables, store as a single metadata parameter
         await client.query(`
           INSERT INTO product_parameters (
             section_id, parameter_id, parameter_name, parameter_type,
@@ -174,11 +223,8 @@ router.post('/products', asyncHandler(async (req, res) => {
             is_required
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         `, [
-          sectionUuid, parameter.parameter_id, parameter.parameter_name,
-          parameter.parameter_type, parameter.default_value,
-          JSON.stringify(parameter.validation_rule),
-          JSON.stringify(parameter.calculation_formula),
-          parameter.order_index, parameter.is_required
+          sectionUuid, `${section.section_id}_metadata`, 'Section Metadata', 'metadata',
+          '', JSON.stringify(sectionMetadata), null, 0, false
         ]);
       }
     }
@@ -186,12 +232,12 @@ router.post('/products', asyncHandler(async (req, res) => {
     return productUuid;
   });
   
-  // Return the created product
-  const createdProduct = await db.findById('products', result);
+  // Return the full product configuration
+  const configResult = await db.query('SELECT get_product_configuration($1) as config', [productUuid]);
   res.status(201).json({ 
     success: true,
     message: 'Product created successfully',
-    data: createdProduct
+    ...configResult.rows[0].config
   });
 }));
 
@@ -203,21 +249,152 @@ router.put('/products/:id', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Invalid product ID format' });
   }
   
-  const updateData = { ...req.body };
-  delete updateData.id; // Remove ID from update data
-  delete updateData.created_at; // Remove immutable fields
-  delete updateData.customVariables;
-  delete updateData.sections;
+  const {
+    product_id,
+    name,
+    code,
+    batch_code,
+    ingredients_type,
+    has_cream,
+    standard_weight,
+    shelf_life,
+    cartons_per_pallet,
+    packs_per_box,
+    boxes_per_carton,
+    empty_box_weight,
+    empty_carton_weight,
+    aql_level,
+    day_format,
+    month_format,
+    description,
+    notes,
+    customVariables = [],
+    sections = []
+  } = req.body;
   
-  const updated = await db.updateById('products', id, updateData);
-  
-  if (!updated) {
-    return res.status(404).json({ error: 'Product not found' });
-  }
+  await db.transaction(async (client) => {
+    // Update core product fields
+    const productFields = {
+      product_id,
+      name,
+      code,
+      batch_code,
+      ingredients_type,
+      has_cream,
+      standard_weight,
+      shelf_life,
+      cartons_per_pallet,
+      packs_per_box,
+      boxes_per_carton,
+      empty_box_weight,
+      empty_carton_weight,
+      aql_level,
+      day_format,
+      month_format,
+      description,
+      notes
+    };
+    
+    // Remove undefined fields
+    Object.keys(productFields).forEach(key => 
+      productFields[key] === undefined && delete productFields[key]
+    );
+    
+    // Update product if there are fields to update
+    if (Object.keys(productFields).length > 0) {
+      const setClause = Object.keys(productFields)
+        .map((key, index) => `${key} = $${index + 2}`)
+        .join(', ');
+      
+      await client.query(
+        `UPDATE products SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [id, ...Object.values(productFields)]
+      );
+    }
+    
+    // Delete existing custom variables, sections, and parameters
+    await client.query('DELETE FROM product_custom_variables WHERE product_id = $1', [id]);
+    
+    // Delete parameters first (due to foreign key)
+    await client.query(`
+      DELETE FROM product_parameters 
+      WHERE section_id IN (SELECT id FROM product_sections WHERE product_id = $1)
+    `, [id]);
+    
+    await client.query('DELETE FROM product_sections WHERE product_id = $1', [id]);
+    
+    // Re-insert custom variables
+    for (const variable of customVariables) {
+      await client.query(`
+        INSERT INTO product_custom_variables (product_id, name, value, description)
+        VALUES ($1, $2, $3, $4)
+      `, [id, variable.name, variable.value, variable.description]);
+    }
+    
+    // Re-insert sections and parameters with UI metadata
+    for (const section of sections) {
+      // Store UI metadata (tables, layout, etc.)
+      const sectionMetadata = {
+        icon: section.icon,
+        tables: section.tables,
+        layout: section.layout,
+        uiConfig: section.uiConfig,
+        metadata: section.metadata
+      };
+      
+      const sectionResult = await client.query(`
+        INSERT INTO product_sections (product_id, section_id, section_name, section_type, order_index)
+        VALUES ($1, $2, $3, $4, $5) RETURNING id
+      `, [id, section.section_id, section.section_name, section.section_type, section.order_index]);
+      
+      const sectionUuid = sectionResult.rows[0].id;
+      
+      // If section has parameters, insert them
+      if (section.parameters && section.parameters.length > 0) {
+        for (const parameter of section.parameters) {
+          // Combine validation rules with UI metadata
+          const paramMetadata = {
+            ...parameter.validation_rule,
+            uiMetadata: sectionMetadata
+          };
+          
+          await client.query(`
+            INSERT INTO product_parameters (
+              section_id, parameter_id, parameter_name, parameter_type,
+              default_value, validation_rule, calculation_formula, order_index,
+              is_required
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `, [
+            sectionUuid, parameter.parameter_id, parameter.parameter_name,
+            parameter.parameter_type, parameter.default_value,
+            JSON.stringify(paramMetadata),
+            JSON.stringify(parameter.calculation_formula),
+            parameter.order_index, parameter.is_required
+          ]);
+        }
+      } else if (section.metadata || section.tables) {
+        // If section has no parameters but has metadata/tables, store as a single metadata parameter
+        await client.query(`
+          INSERT INTO product_parameters (
+            section_id, parameter_id, parameter_name, parameter_type,
+            default_value, validation_rule, calculation_formula, order_index,
+            is_required
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `, [
+          sectionUuid, `${section.section_id}_metadata`, 'Section Metadata', 'metadata',
+          '', JSON.stringify(sectionMetadata), null, 0, false
+        ]);
+      }
+    }
+  });
   
   // Return updated product with full configuration
   const configResult = await db.query('SELECT get_product_configuration($1) as config', [id]);
-  res.json(configResult.rows[0].config);
+  res.json({
+    success: true,
+    message: 'Product updated successfully',
+    ...configResult.rows[0].config
+  });
 }));
 
 // DELETE /api/products/:id - Delete product
@@ -228,13 +405,18 @@ router.delete('/products/:id', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Invalid product ID format' });
   }
   
+  // Delete product and related data (cascade should handle this in database)
   const deleted = await db.deleteById('products', id);
   
   if (!deleted) {
     return res.status(404).json({ error: 'Product not found' });
   }
   
-  res.json({ message: 'Product deleted successfully', id: deleted.id });
+  res.json({ 
+    success: true,
+    message: 'Product deleted successfully', 
+    id: deleted.id 
+  });
 }));
 
 // ================================================================

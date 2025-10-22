@@ -284,18 +284,31 @@ saveProductFromForm: function() {
         // Save product to the database via API
  saveProduct: async function(productData) {
     try {
-        const targetId = productData.id || productData.product_id;
-        const existingProduct = this.products.find(p => String(p.id) === String(targetId));
+        const uuid = document.getElementById('product-uuid')?.value?.trim();
+        let response;
 
-        if (existingProduct) {
-            await window.apiClient.updateProduct(targetId, productData);
+        if (uuid) {
+            // Update existing product
+            response = await window.apiClient.updateProduct(uuid, productData);
             this.showNotification('Product updated successfully', 'success');
         } else {
-            const savedProduct = await window.apiClient.createProduct(productData);
-            if (savedProduct && savedProduct.id && !productData.id) {
-                productData.id = savedProduct.id;
-            }
+            // Create new product
+            response = await window.apiClient.createProduct(productData);
             this.showNotification('Product added successfully and synchronized with database.', 'success');
+        }
+
+        // Store the configuration that comes back from API
+        if (response && response.product) {
+            // The API returns the full configuration - cache it if needed
+            const productConfig = response;
+            console.log('Received product configuration:', productConfig);
+            
+            // Update local cache if you have one
+            const productId = productConfig.product.id;
+            if (productId) {
+                // You can store this in a local cache or state management
+                // For now, we'll just reload the products list
+            }
         }
 
         await this.loadProducts();
@@ -434,8 +447,12 @@ saveProductFromForm: function() {
         loadProductToForm: function(configOrProduct) {
             const cfg = configOrProduct || {};
             const product = this.normalizeProduct(cfg.product || cfg);
+            const customVariables = cfg.customVariables || [];
+            const sections = cfg.sections || [];
+            
             if (!product) return;
 
+            // Set UUID for editing
             let uuidEl = document.getElementById('product-uuid');
             if (!uuidEl) {
                 uuidEl = document.createElement('input');
@@ -472,7 +489,124 @@ saveProductFromForm: function() {
             setVal('product-review-no', product.reviewNo || product.review_no || '');
             setVal('product-issue-date', product.issueDate || product.issue_date || '');
             setVal('product-review-date', product.reviewDate || product.review_date || '');
-            // TODO: populate customVariables and sections when UI builders are available
+            
+            // Load custom variables if present
+            if (customVariables && customVariables.length > 0) {
+                this.loadCustomVariables(customVariables);
+            }
+            
+            // Load sections and rebuild UI if present
+            if (sections && sections.length > 0) {
+                this.loadSections(sections);
+            }
+        },
+        
+        loadCustomVariables: function(variables) {
+            const container = document.getElementById('variables-container');
+            if (!container) return;
+            
+            // Clear existing variables
+            container.innerHTML = '';
+            
+            variables.forEach(variable => {
+                const varRow = document.createElement('div');
+                varRow.className = 'variable-row flex gap-2 mb-2';
+                varRow.innerHTML = `
+                    <input type="text" name="variable-name" class="var-name input-field flex-1" 
+                           value="${variable.name || ''}" placeholder="Variable Name">
+                    <input type="text" name="variable-value" class="var-value input-field flex-1" 
+                           value="${variable.value || ''}" placeholder="Value">
+                    <input type="text" name="variable-desc" class="var-desc input-field flex-1" 
+                           value="${variable.description || ''}" placeholder="Description">
+                    <button type="button" class="btn-danger remove-variable" onclick="this.parentElement.remove()">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                `;
+                container.appendChild(varRow);
+            });
+        },
+        
+        loadSections: function(sections) {
+            const container = document.querySelector('.child-tabs-content');
+            if (!container) return;
+            
+            // Clear existing sections
+            container.innerHTML = '';
+            
+            sections.forEach((sectionData, index) => {
+                const section = sectionData.section || sectionData;
+                const parameters = sectionData.parameters || [];
+                
+                // Extract UI metadata from parameters if available
+                let uiMetadata = null;
+                const metadataParam = parameters.find(p => p.parameter_type === 'metadata');
+                if (metadataParam && metadataParam.validation_rule) {
+                    try {
+                        uiMetadata = typeof metadataParam.validation_rule === 'string' 
+                            ? JSON.parse(metadataParam.validation_rule)
+                            : metadataParam.validation_rule;
+                    } catch (e) {
+                        console.warn('Could not parse UI metadata:', e);
+                    }
+                }
+                
+                // Create section panel
+                const panel = document.createElement('div');
+                panel.className = 'section-panel tab-pane';
+                panel.setAttribute('data-section-id', section.section_id);
+                panel.setAttribute('data-section-name', section.section_name);
+                panel.setAttribute('data-section-type', section.section_type || 'quality_control');
+                
+                // Build section content based on metadata or parameters
+                if (uiMetadata && uiMetadata.tables) {
+                    // Reconstruct tables from metadata
+                    panel.innerHTML = this.buildTablesFromMetadata(uiMetadata, section);
+                } else if (parameters.length > 0) {
+                    // Build simple parameter list
+                    panel.innerHTML = this.buildParameterList(parameters, section);
+                } else {
+                    // Empty section
+                    panel.innerHTML = `
+                        <h3 class="section-title">${section.section_name}</h3>
+                        <p>No parameters defined for this section.</p>
+                    `;
+                }
+                
+                container.appendChild(panel);
+            });
+        },
+        
+        buildTablesFromMetadata: function(metadata, section) {
+            // This would reconstruct the complex table layouts from saved metadata
+            // For now, return a simple representation
+            return `
+                <h3 class="section-title">${section.section_name}</h3>
+                <div class="section-metadata">
+                    ${metadata.icon ? `<i class="${metadata.icon}"></i>` : ''}
+                    <pre>${JSON.stringify(metadata, null, 2)}</pre>
+                </div>
+            `;
+        },
+        
+        buildParameterList: function(parameters, section) {
+            let html = `<h3 class="section-title">${section.section_name}</h3><div class="parameters-list">`;
+            
+            parameters.forEach(param => {
+                if (param.parameter_type !== 'metadata') {
+                    html += `
+                        <div class="parameter-row" data-parameter-id="${param.parameter_id}">
+                            <label class="param-name">${param.parameter_name}:</label>
+                            <input type="${param.parameter_type === 'number' ? 'number' : 'text'}" 
+                                   class="input-field" 
+                                   value="${param.default_value || ''}"
+                                   ${param.is_required ? 'required' : ''}>
+                        </div>
+                    `;
+                }
+            });
+            
+            html += '</div>';
+            return html;
         },
         searchProducts: function(query) { /* ... unchanged ... */ },
         importProducts: function() { /* ... unchanged, but be aware it only updates UI until next reload ... */ },

@@ -214,21 +214,47 @@
             const out = [];
             const container = document.querySelector('.child-tabs-content');
             if (!container) return out;
-            const panels = container.querySelectorAll('[data-section-id], .section-panel');
+            
+            // Also check for tabs content in the modal
+            const tabsContainer = document.getElementById('product-tabs-content');
+            const panels = tabsContainer 
+                ? tabsContainer.querySelectorAll('.tab-panel')
+                : container.querySelectorAll('[data-section-id], .section-panel');
+                
             panels.forEach((panel, idx) => {
-                const section_id = panel.getAttribute('data-section-id') || `section_${idx + 1}`;
-                const section_name = panel.getAttribute('data-section-name') || panel.querySelector('.section-title')?.textContent?.trim() || `Section ${idx + 1}`;
-                const section_type = panel.getAttribute('data-section-type') || 'quality_control';
-                const order_index = idx;
+                const tabId = panel.id?.replace('panel-', '') || '';
+                const tabLabel = panel.getAttribute('data-tab-label') || '';
+                
+                // Determine section ID and name based on tab
+                let section_id = panel.getAttribute('data-section-id') || tabId || `section_${idx + 1}`;
+                let section_name = panel.getAttribute('data-section-name') || tabLabel || `Section ${idx + 1}`;
+                
+                // Collect all UI elements and structure as metadata
+                const metadata = this._collectPanelMetadata(panel);
                 const parameters = [];
+                
+                // Handle different tab types
+                if (tabId === 'form-sections' || section_id.includes('form')) {
+                    // Collect form section tables and parameters
+                    const tables = panel.querySelectorAll('table, .data-table');
+                    const tablesData = Array.from(tables).map(table => this._extractTableData(table));
+                    
+                    if (tablesData.length > 0) {
+                        metadata.tables = tablesData;
+                    }
+                }
+                
+                // Collect traditional parameters
                 const paramRows = panel.querySelectorAll('[data-parameter-id], .parameter-row');
                 paramRows.forEach((row, pidx) => {
                     const parameter_id = row.getAttribute('data-parameter-id') || `param_${pidx + 1}`;
-                    const parameter_name = row.getAttribute('data-parameter-name') || row.querySelector('.param-name')?.textContent?.trim() || `Parameter ${pidx + 1}`;
+                    const parameter_name = row.getAttribute('data-parameter-name') || 
+                                         row.querySelector('.param-name')?.textContent?.trim() || 
+                                         `Parameter ${pidx + 1}`;
                     const parameter_type = row.getAttribute('data-parameter-type') || 'text';
                     const default_value = row.querySelector('input, select, textarea')?.value || '';
-                    const order_index_p = pidx;
                     const is_required = !!row.querySelector('[required]');
+                    
                     parameters.push({
                         parameter_id,
                         parameter_name,
@@ -236,13 +262,105 @@
                         default_value,
                         validation_rule: null,
                         calculation_formula: null,
-                        order_index: order_index_p,
+                        order_index: pidx,
                         is_required
                     });
                 });
-                out.push({ section_id, section_name, section_type, order_index, parameters });
+                
+                // Create section object with metadata
+                const sectionObj = {
+                    section_id,
+                    section_name,
+                    section_type: panel.getAttribute('data-section-type') || 'quality_control',
+                    order_index: idx,
+                    parameters,
+                    metadata,
+                    icon: this._getTabIcon(tabId),
+                    tables: metadata.tables,
+                    layout: metadata.layout,
+                    uiConfig: metadata.uiConfig
+                };
+                
+                out.push(sectionObj);
             });
+            
             return out;
+        }
+        
+        _collectPanelMetadata(panel) {
+            const metadata = {
+                layout: {},
+                uiConfig: {},
+                tables: [],
+                fields: []
+            };
+            
+            // Collect input fields metadata
+            const inputs = panel.querySelectorAll('input, select, textarea');
+            inputs.forEach(input => {
+                if (input.id) {
+                    metadata.fields.push({
+                        id: input.id,
+                        type: input.type || 'text',
+                        name: input.name || '',
+                        value: input.value || '',
+                        required: input.hasAttribute('required')
+                    });
+                }
+            });
+            
+            // Store layout classes and structure
+            metadata.layout.className = panel.className;
+            metadata.layout.innerHTML = panel.innerHTML.substring(0, 500); // Store partial HTML for reference
+            
+            return metadata;
+        }
+        
+        _extractTableData(table) {
+            const tableData = {
+                headers: [],
+                rows: [],
+                className: table.className,
+                id: table.id
+            };
+            
+            // Extract headers
+            const headers = table.querySelectorAll('thead th, thead td');
+            headers.forEach(header => {
+                tableData.headers.push(header.textContent.trim());
+            });
+            
+            // Extract row data
+            const rows = table.querySelectorAll('tbody tr');
+            rows.forEach(row => {
+                const rowData = [];
+                const cells = row.querySelectorAll('td');
+                cells.forEach(cell => {
+                    const input = cell.querySelector('input, select, textarea');
+                    if (input) {
+                        rowData.push({
+                            type: 'input',
+                            inputType: input.type,
+                            value: input.value,
+                            name: input.name,
+                            id: input.id
+                        });
+                    } else {
+                        rowData.push({
+                            type: 'text',
+                            value: cell.textContent.trim()
+                        });
+                    }
+                });
+                tableData.rows.push(rowData);
+            });
+            
+            return tableData;
+        }
+        
+        _getTabIcon(tabId) {
+            const tab = TAB_CONFIG.find(t => t.id === tabId);
+            return tab ? tab.icon : 'fas fa-file';
         }
         init() {
             if (this.initialized) return;
